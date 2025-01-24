@@ -1,6 +1,6 @@
 # scripts/evaluate.py
 import sys
-sys.path.append('/kaggle/working/code/')
+sys.path.append('/root/workspace/vqvae2-mscoco2017/')
 
 import torch
 import torch.nn.functional as F
@@ -12,18 +12,28 @@ import numpy as np
 
 def evaluate():
     # Hyperparameters
-    batch_size = 64
-    images_dir = '/kaggle/input/coco-2017-dataset/coco2017/test2017'
+    batch_size = 64  # Keep batches for memory efficiency
+    images_dir = '/root/workspace/coco2017/test2017'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load the trained VQ-VAE model
     model = VQVAE().to(device)
-    checkpoint = '/kaggle/working/vqvae_epoch_best.pth'
+    checkpoint = '/root/workspace/vqvae2-mscoco2017/vqvae_epoch_best.pth'
     model.load_state_dict(torch.load(checkpoint, map_location=device)['state_dict'])
     model.eval()
 
-    # Prepare data loader
-    dataloader = get_dataloader_mscoco(images_dir, None, batch_size, shuffle=False, num_workers=4, distributed=False)
+    # Prepare data loader without captions
+    dataloader = get_dataloader_mscoco(
+        images_dir, 
+        captions_file=None,  # No captions needed
+        batch_size=batch_size, 
+        clip_model=None,  # Pass None for evaluation
+        device=device, 
+        shuffle=False, 
+        num_workers=16, 
+        persistent_workers=True, 
+        distributed=False
+    )
 
     # Inception Model Setup
     from torchvision.models.inception import inception_v3
@@ -34,16 +44,14 @@ def evaluate():
     for param in inception_model.parameters():
         param.requires_grad = False
 
-    # Variables to store statistics
+    # Compute Inception Score & FID in batches
     all_preds = []
-    mu_real = 0
-    mu_gen = 0
-    sigma_real = 0
-    sigma_gen = 0
+    mu_real, mu_gen = 0, 0
+    sigma_real, sigma_gen = 0, 0
     num_samples = 0
 
     with torch.no_grad():
-        for images in tqdm(dataloader):
+        for images in tqdm(dataloader, desc="Processing Batches"):
             images = images.to(device)
             x_recon, _ = model(images)
 
@@ -59,6 +67,7 @@ def evaluate():
             real_features_np = real_features.cpu().numpy()
             mu_real += real_features_np.sum(axis=0)
             sigma_real += real_features_np.T @ real_features_np
+
             # Update mean and covariance for generated images
             recon_features_np = recon_features.cpu().numpy()
             mu_gen += recon_features_np.sum(axis=0)
@@ -78,7 +87,6 @@ def evaluate():
 
     # Compute FID
     from scipy.linalg import sqrtm
-
     cov_sqrt, _ = sqrtm(sigma_real @ sigma_gen, disp=False)
     if np.iscomplexobj(cov_sqrt):
         cov_sqrt = cov_sqrt.real

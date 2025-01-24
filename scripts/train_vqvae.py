@@ -75,7 +75,7 @@ def train():
             # Forward pass
             x_recon, diff = model(images)
             recon_loss = F.mse_loss(x_recon, images)
-            loss = recon_loss + diff
+            loss = recon_loss + 0.25 * diff
 
             # Backward pass
             loss.backward()
@@ -105,7 +105,7 @@ def train():
                 images = images.to(device)
                 x_recon, diff = model(images)
                 recon_loss = F.mse_loss(x_recon, images)
-                loss = recon_loss + diff
+                loss = recon_loss + 0.25 * diff
                 val_loss += loss.item()
 
                 # Free memory explicitly
@@ -119,7 +119,9 @@ def train():
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             epochs_no_improve = 0
-            save_checkpoint(model, optimizer, epoch, f'vqvae_epoch_{epoch}_best.pth')
+            save_checkpoint(model, optimizer, epoch, f'vqvae_epoch_best.pth')
+            os.system(f"echo Saved model at epoch {epoch+1} with loss: {avg_val_loss} >> loss_log.txt")
+
         else:
             epochs_no_improve += 1
 

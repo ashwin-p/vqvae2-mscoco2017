@@ -1,5 +1,4 @@
-# ut/datasets.py
-
+# utils/datasets.py
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -12,12 +11,12 @@ from models.clip_model import CLIPTextEncoder
 
 
 class MSCOCODataset(Dataset):
-    def __init__(self, images_dir, captions_file, clip_model, device='cuda', transform=None, fraction=1.0):
+    def __init__(self, images_dir, captions_file=None, clip_model=None, device='cuda', transform=None, fraction=1.0):
         """
         Args:
             images_dir (str): Directory containing images.
-            captions_file (str): CSV file containing image filenames and captions.
-            clip_model (CLIPTextEncoder): Preloaded CLIP text encoder model.
+            captions_file (str or None): CSV file containing image filenames and captions (None for evaluation).
+            clip_model (CLIPTextEncoder or None): Preloaded CLIP text encoder model (None if captions not used).
             device (str): Device for CLIP model ('cuda' or 'cpu').
             transform (callable, optional): Transformations for images.
             fraction (float, optional): Fraction of the dataset to use (0 < fraction <= 1).
@@ -27,23 +26,21 @@ class MSCOCODataset(Dataset):
         self.clip_model = clip_model
         self.device = device
 
-        # Load captions from the CSV file
-        df = pd.read_csv(captions_file)
-        df['image'] = df['image'].astype(str).str.strip()
-        df['caption'] = df['caption'].astype(str).str.strip()
+        if captions_file is None:
+            # Image-only dataset for evaluation
+            self.image_filenames = sorted(os.listdir(images_dir))
+            self.image_captions = None  # No captions used
+        else:
+            # Load captions from CSV
+            df = pd.read_csv(captions_file)
+            df['image'] = df['image'].astype(str).str.strip()
+            df['caption'] = df['caption'].astype(str).str.strip()
 
-        # Build a mapping from image_name to list of captions
-        self.image_captions = df.groupby('image')['caption'].apply(list).to_dict()
+            # Build a mapping from image_name to list of captions
+            self.image_captions = df.groupby('image')['caption'].apply(list).to_dict()
+            self.image_filenames = list(self.image_captions.keys())
 
-        # Get list of unique image filenames
-        self.image_filenames = list(self.image_captions.keys())
-
-        # Apply fraction to reduce dataset size
-        if fraction < 1.0:
-            num_samples = int(len(self.image_filenames) * fraction)
-            self.image_filenames = random.sample(self.image_filenames, num_samples)
-
-        print(f"Using {len(self.image_filenames)} images out of {len(self.image_captions)} total images.")
+        print(f"Using {len(self.image_filenames)} images.")
 
     def __len__(self):
         return len(self.image_filenames)
@@ -57,6 +54,10 @@ class MSCOCODataset(Dataset):
         if self.transform:
             image = self.transform(image)
 
+        if self.image_captions is None:
+            # Return only image if no captions
+            return image
+
         # Get all captions for the image
         captions = self.image_captions[image_filename]
 
@@ -68,16 +69,16 @@ class MSCOCODataset(Dataset):
         return image, avg_text_embedding
 
 
-def get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_model, device='cuda',
+def get_dataloader_mscoco(images_dir, captions_file=None, batch_size=64, clip_model=None, device='cuda',
                            shuffle=True, num_workers=2, fraction=1.0, distributed=False, persistent_workers=False):
     """
     Creates a DataLoader for the MS COCO dataset.
     
     Args:
         images_dir (str): Path to image directory.
-        captions_file (str): Path to captions CSV file.
+        captions_file (str or None): Path to captions CSV file, or None for evaluation mode.
         batch_size (int): Batch size.
-        clip_model (CLIPTextEncoder): CLIP text encoder model.
+        clip_model (CLIPTextEncoder or None): CLIP text encoder model (None if evaluation mode).
         device (str): Device to run CLIP model on.
         shuffle (bool): Whether to shuffle dataset.
         num_workers (int): Number of DataLoader workers.
@@ -109,8 +110,8 @@ def get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_model, dev
         sampler=sampler,
         shuffle=shuffle,
         num_workers=num_workers,
-        persistent_workers=persistent_workers,  # Added this option
-        pin_memory=False  # Ensures data is transferred efficiently to GPU
+        persistent_workers=persistent_workers,  # Keep workers alive for multiple epochs
+        pin_memory=False  # Ensures efficient data transfer to GPU
     )
     return dataloader
 
