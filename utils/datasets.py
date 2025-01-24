@@ -1,4 +1,4 @@
-# utils/datasets.py
+# ut/datasets.py
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -69,7 +69,7 @@ class MSCOCODataset(Dataset):
 
 
 def get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_model, device='cuda',
-                           shuffle=True, num_workers=2, fraction=1.0, distributed=False):
+                           shuffle=True, num_workers=2, fraction=1.0, distributed=False, persistent_workers=False):
     """
     Creates a DataLoader for the MS COCO dataset.
     
@@ -83,6 +83,7 @@ def get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_model, dev
         num_workers (int): Number of DataLoader workers.
         fraction (float): Fraction of dataset to use.
         distributed (bool): Whether to use DistributedSampler.
+        persistent_workers (bool): Whether to keep workers alive for multiple epochs.
 
     Returns:
         DataLoader: DataLoader for MS COCO dataset.
@@ -102,6 +103,14 @@ def get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_model, dev
     else:
         sampler = None
 
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, shuffle=shuffle, num_workers=num_workers)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        persistent_workers=persistent_workers,  # Added this option
+        pin_memory=False  # Ensures data is transferred efficiently to GPU
+    )
     return dataloader
 

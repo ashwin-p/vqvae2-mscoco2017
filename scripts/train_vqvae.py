@@ -1,12 +1,13 @@
 # scripts/train_vqvae.py
+import torch.multiprocessing as mp
+mp.set_start_method('spawn', force=True)
 import sys
-sys.path.append('/kaggle/working/code/')
+sys.path.append('/root/workspace/vqvae2-mscoco2017/')
 
 import torch
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn import functional as F
-from torch.cuda.amp import GradScaler, autocast
 from models.vqvae import VQVAE
 from models.clip_model import CLIPTextEncoder
 from utils.datasets import get_dataloader_mscoco
@@ -19,12 +20,13 @@ def train():
     # Hyperparameters
     num_epochs = 100
     patience = 5
-    initial_learning_rate = 2e-4
-    batch_size = 64
-    images_dir = '/kaggle/input/coco-2017-dataset/coco2017/train2017'
-    captions_file = '/kaggle/working/mscoco_train_captions.csv'
-    val_images_dir = '/kaggle/input/coco-2017-dataset/coco2017/val2017'
-    val_captions_file = '/kaggle/working/mscoco_val_captions.csv'
+    initial_learning_rate = 2e-4  # Lowered to reduce instability
+    batch_size = 128
+    gradient_accumulation_steps = 4  # Accumulate gradients over 4 steps
+    images_dir = '/root/workspace/coco2017/train2017'
+    captions_file = '/root/workspace/vqvae2-mscoco2017/mscoco_train_captions.csv'
+    val_images_dir = '/root/workspace/coco2017/val2017'
+    val_captions_file = '/root/workspace/vqvae2-mscoco2017/mscoco_val_captions.csv'
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -36,19 +38,22 @@ def train():
     model = VQVAE().to(device)
 
     # Log model parameters before training starts
-    print("Model Architecture:")
-    print(model)
+    #print("Model Architecture:")
+    #print(model)
 
-    # Initialize optimizer, scheduler, and mixed precision scaler
+    # Initialize optimizer, scheduler
     optimizer = Adam(model.parameters(), lr=initial_learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)  # Cosine Annealing
-    scaler = GradScaler()  # Enable mixed precision training
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)
 
-    # Load dataset
-    dataloader = get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_text_encoder,
-                                       device=device, shuffle=True, num_workers=4, distributed=False)
-    val_dataloader = get_dataloader_mscoco(val_images_dir, val_captions_file, batch_size, clip_text_encoder,
-                                           device=device, shuffle=False, num_workers=4, distributed=False)
+    # Load dataset with proper settings
+    dataloader = get_dataloader_mscoco(
+        images_dir, captions_file, batch_size, clip_text_encoder,
+        device=device, shuffle=True, num_workers=8, persistent_workers=True
+    )
+    val_dataloader = get_dataloader_mscoco(
+        val_images_dir, val_captions_file, batch_size, clip_text_encoder,
+        device=device, shuffle=False, num_workers=8, persistent_workers=True
+    )
 
     best_val_loss = np.inf
     epochs_no_improve = 0
@@ -59,31 +64,35 @@ def train():
             print("Early stopping triggered.")
             break
 
-        # Training phase
         model.train()
         train_loss = 0
         loop = tqdm(dataloader)
 
-        for images, _ in loop:
+        for step, (images, _) in enumerate(loop):
             images = images.to(device)
             optimizer.zero_grad()
 
-            # Mixed precision forward pass
-            with autocast():
-                x_recon, diff = model(images)
-                recon_loss = F.mse_loss(x_recon, images)
-                loss = recon_loss + diff
+            # Forward pass
+            x_recon, diff = model(images)
+            recon_loss = F.mse_loss(x_recon, images)
+            loss = recon_loss + diff
 
-            # Backward pass with gradient scaling
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
+            # Backward pass
+            loss.backward()
+
+            # Only update the weights every `gradient_accumulation_steps` steps
+            if (step + 1) % gradient_accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
             train_loss += loss.item()
 
             loop.set_description(f"Epoch [{epoch+1}/{num_epochs}]")
             loop.set_postfix(loss=loss.item())
+
+            # Free memory explicitly
+            del images, x_recon, loss
+            torch.cuda.empty_cache()
 
         avg_train_loss = train_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Training Loss: {avg_train_loss}")
@@ -94,11 +103,14 @@ def train():
         with torch.no_grad():
             for images, _ in val_dataloader:
                 images = images.to(device)
-                with autocast():
-                    x_recon, diff = model(images)
-                    recon_loss = F.mse_loss(x_recon, images)
-                    loss = recon_loss + diff
+                x_recon, diff = model(images)
+                recon_loss = F.mse_loss(x_recon, images)
+                loss = recon_loss + diff
                 val_loss += loss.item()
+
+                # Free memory explicitly
+                del images, x_recon, loss
+                torch.cuda.empty_cache()
 
         avg_val_loss = val_loss / len(val_dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Validation Loss: {avg_val_loss}")
@@ -118,6 +130,11 @@ def train():
         if epochs_no_improve >= patience:
             print(f"No improvement for {patience} epochs, stopping training.")
             early_stop = True
+
+    # Cleanup: explicitly delete CUDA tensors & close dataloader workers
+    del model, optimizer, scheduler, dataloader, val_dataloader
+    torch.cuda.empty_cache()
+    print("Training completed.")
 
 if __name__ == "__main__":
     train()

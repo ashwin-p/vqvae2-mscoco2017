@@ -1,10 +1,7 @@
-#models/vqvae.py
+# models/vqvae.py
 import torch
 from torch import nn
 from torch.nn import functional as F
-
-import torch.distributed as dist_fn
-
 
 # Copyright 2018 The Sonnet Authors. All Rights Reserved.
 #
@@ -54,9 +51,6 @@ class Quantize(nn.Module):
         if self.training:
             embed_onehot_sum = embed_onehot.sum(0)
             embed_sum = flatten.transpose(0, 1) @ embed_onehot
-
-            dist_fn.all_reduce(embed_onehot_sum)
-            dist_fn.all_reduce(embed_sum)
 
             self.cluster_size.data.mul_(self.decay).add_(
                 embed_onehot_sum, alpha=1 - self.decay
@@ -237,3 +231,4 @@ class VQVAE(nn.Module):
         dec = self.decode(quant_t, quant_b)
 
         return dec
+
