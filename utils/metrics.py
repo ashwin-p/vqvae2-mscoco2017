@@ -7,37 +7,50 @@ import numpy as np
 from scipy.linalg import sqrtm
 
 def calculate_inception_score(images, device='cuda', batch_size=32, splits=10):
-    # Load inception model
-    inception_model = inception_v3(pretrained=True, transform_input=False).to(device)
-    inception_model.eval()
-    up = torch.nn.Upsample(size=(299, 299), mode='bilinear')
+    """
+    Computes the Inception Score (IS) using InceptionV3.
+    
+    Args:
+        images (numpy.ndarray): Features extracted from InceptionV3 (shape: [N, 1000]).
+        device (str): GPU or CPU.
+        batch_size (int): Batch size for computation.
+        splits (int): Number of splits for IS calculation.
 
-    def get_pred(x):
-        x = up(x)
-        with torch.no_grad():
-            x = inception_model(x)
-        return torch.nn.functional.softmax(x, dim=1).cpu().numpy()
+    Returns:
+        float: Mean Inception Score.
+    """
+    # Convert NumPy array to Torch tensor (fixing AttributeError)
+    images = torch.tensor(images, dtype=torch.float32, device=device)
 
-    preds = np.zeros((len(images), 1000))
-    for i in range(0, len(images), batch_size):
-        batch = images[i:i+batch_size].to(device)
-        preds[i:i+batch_size] = get_pred(batch)
+    # Compute softmax probabilities
+    preds = torch.nn.functional.softmax(images, dim=1).cpu().numpy()
 
+    # Split into chunks
     split_scores = []
     for k in range(splits):
         part = preds[k * (len(preds) // splits):(k+1) * (len(preds) // splits), :]
         py = np.mean(part, axis=0)
-        scores = []
-        for i in range(part.shape[0]):
-            pyx = part[i]
-            scores.append(np.sum(pyx * (np.log(pyx + 1e-16) - np.log(py + 1e-16))))
-        split_scores.append(np.exp(np.mean(scores)))
+        kl_div = part * (np.log(part + 1e-16) - np.log(py + 1e-16))
+        kl_div = np.mean(np.sum(kl_div, axis=1))
+        split_scores.append(np.exp(kl_div))
 
     return np.mean(split_scores), np.std(split_scores)
 
 def calculate_fid_score(real_images, generated_images, device='cuda', batch_size=32):
+    """
+    Computes the Frechet Inception Distance (FID) between real and generated images.
+    
+    Args:
+        real_images (torch.Tensor): Real images tensor of shape [N, 3, H, W].
+        generated_images (torch.Tensor): Generated images tensor of shape [N, 3, H, W].
+        device (str): GPU or CPU.
+        batch_size (int): Batch size for computation.
+
+    Returns:
+        float: FID score.
+    """
     # Load inception model
-    inception_model = inception_v3(pretrained=True, transform_input=False).to(device)
+    inception_model = inception_v3(weights="IMAGENET1K_V1", transform_input=False).to(device)
     inception_model.eval()
     up = torch.nn.Upsample(size=(299, 299), mode='bilinear')
 
@@ -68,5 +81,6 @@ def calculate_fid_score(real_images, generated_images, device='cuda', batch_size
     if np.iscomplexobj(covmean):
         covmean = covmean.real
     fid = diff.dot(diff) + np.trace(sigma1 + sigma2 - 2 * covmean)
+    
     return fid
 

@@ -25,7 +25,7 @@ def evaluate_psnr():
 
     # Load trained VQ-VAE-2 model
     model = VQVAE().to(device)
-    checkpoint = '/root/workspace/vqvae2-mscoco2017/vqvae_epoch_best.pth'  # Update checkpoint path
+    checkpoint = '/root/workspace/vqvae2-mscoco2017/vqvae_latest.pth'  # Update checkpoint path
     model.load_state_dict(torch.load(checkpoint, map_location=device)['state_dict'])
     model.eval()
 
