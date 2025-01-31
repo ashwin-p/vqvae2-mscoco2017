@@ -38,16 +38,14 @@ def train():
     vqvae.load_state_dict(vqvae_checkpoint['state_dict'])
     vqvae.eval()
 
-    # Determine the shape of the top and bottom latent codes
+    # Determine the shape of the top latent codes
     sample_data = torch.randn(1, 3, 256, 256).to(device)  # Adjust image size if needed
     with torch.no_grad():
         quant_t, quant_b, _, id_t, id_b = vqvae.encode(sample_data)
     height_t, width_t = id_t.shape[1], id_t.shape[2]
-    height_b, width_b = id_b.shape[1], id_b.shape[2]
     n_embed_t = vqvae.quantize_t.n_embed  # Number of embeddings in top codebook
-    n_embed_b = vqvae.quantize_b.n_embed  # Number of embeddings in bottom codebook
 
-    # Load PixelSNAIL models
+    # Load PixelSNAIL model for top level
     pixelsnail_t = PixelSNAIL(
         shape=(height_t, width_t),
         n_class=n_embed_t,
@@ -64,28 +62,10 @@ def train():
         n_out_res_block=0
     ).to(device)
 
-    pixelsnail_b = PixelSNAIL(
-        shape=(height_b, width_b),
-        n_class=n_embed_b,
-        channel=256,
-        kernel_size=5,
-        n_block=4,
-        n_res_block=4,
-        res_channel=128,
-        attention=True,
-        dropout=0.1,
-        n_cond_res_block=2,
-        cond_res_channel=256,
-        cond_res_kernel=3,
-        n_out_res_block=0
-    ).to(device)
-
     optimizer_t = Adam(pixelsnail_t.parameters(), lr=initial_learning_rate)
-    optimizer_b = Adam(pixelsnail_b.parameters(), lr=initial_learning_rate)
 
-    # Initialize schedulers
+    # Initialize scheduler
     scheduler_t = CosineAnnealingLR(optimizer_t, T_max=num_epochs, eta_min=min_learning_rate)
-    scheduler_b = CosineAnnealingLR(optimizer_b, T_max=num_epochs, eta_min=min_learning_rate)
 
     clip_text_encoder = CLIPTextEncoder(device=device)
     clip_text_encoder.eval()
@@ -109,20 +89,17 @@ def train():
             break
 
         pixelsnail_t.train()
-        pixelsnail_b.train()
         train_loss = 0
         loop = tqdm(dataloader)
 
         for step, (images, _) in enumerate(loop):
             images = images.to(device)
             optimizer_t.zero_grad()
-            optimizer_b.zero_grad()
 
             with torch.no_grad():
                 # Get latent codes from VQ-VAE model
-                _, _, _, id_t, id_b = vqvae.encode(images)
+                _, _, _, id_t, _ = vqvae.encode(images)
                 # id_t: [batch_size, height_t, width_t]
-                # id_b: [batch_size, height_b, width_b]
 
             # Train top PixelSNAIL
             inputs_t = id_t
@@ -135,55 +112,33 @@ def train():
                 targets_t.flatten()
             )
 
-            # Train bottom PixelSNAIL conditioned on top latents
-            inputs_b = id_b
-            targets_b = id_b
-
-            with torch.no_grad():
-                # Need to get condition from top latents
-                condition_t = id_t  # Pass id_t as LongTensor
-                condition_t = condition_t.to(device)
-
-            logits_b, _ = pixelsnail_b(inputs_b, condition=condition_t)
-
-            loss_b = F.cross_entropy(
-                logits_b.reshape(-1, n_embed_b),
-                targets_b.flatten()
-            )
-
-            # Total loss
-            loss = loss_t + loss_b
-
             # Backward pass and optimization
-            loss.backward()
+            loss_t.backward()
             optimizer_t.step()
-            optimizer_b.step()
 
-            train_loss += loss.item()
+            train_loss += loss_t.item()
 
             loop.set_description(f"Epoch [{epoch+1}/{num_epochs}]")
-            loop.set_postfix(loss=loss.item())
+            loop.set_postfix(loss=loss_t.item())
 
             # Free memory explicitly
-            del images, logits_t, logits_b, loss, loss_t, loss_b
+            del images, logits_t, loss_t
             torch.cuda.empty_cache()
 
         avg_train_loss = train_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Training Loss: {avg_train_loss}")
 
-        # Adjust learning rates
+        # Adjust learning rate
         scheduler_t.step()
-        scheduler_b.step()
 
         # Validation phase
         pixelsnail_t.eval()
-        pixelsnail_b.eval()
         val_loss = 0
         with torch.no_grad():
             for images, _ in val_dataloader:
                 images = images.to(device)
                 with torch.no_grad():
-                    _, _, _, id_t, id_b = vqvae.encode(images)
+                    _, _, _, id_t, _ = vqvae.encode(images)
 
                 # Validate top PixelSNAIL
                 inputs_t = id_t
@@ -196,28 +151,10 @@ def train():
                     targets_t.flatten()
                 )
 
-                # Validate bottom PixelSNAIL
-                inputs_b = id_b
-                targets_b = id_b
-
-                with torch.no_grad():
-                    condition_t = id_t  # Pass id_t as LongTensor
-                    condition_t = condition_t.to(device)
-
-                logits_b, _ = pixelsnail_b(inputs_b, condition=condition_t)
-
-                loss_b = F.cross_entropy(
-                    logits_b.reshape(-1, n_embed_b),
-                    targets_b.flatten()
-                )
-
-                # Total loss
-                loss = loss_t + loss_b
-
-                val_loss += loss.item()
+                val_loss += loss_t.item()
 
                 # Free memory explicitly
-                del images, logits_t, logits_b, loss, loss_t, loss_b
+                del images, logits_t, loss_t
                 torch.cuda.empty_cache()
 
         avg_val_loss = val_loss / len(val_dataloader)
@@ -228,8 +165,7 @@ def train():
             best_val_loss = avg_val_loss
             epochs_no_improve = 0
             save_checkpoint(pixelsnail_t, optimizer_t, epoch, f'pixelsnail_t_epoch_best.pth')
-            save_checkpoint(pixelsnail_b, optimizer_b, epoch, f'pixelsnail_b_epoch_best.pth')
-            os.system(f"echo Saved PixelSNAIL models at epoch {epoch+1} with loss: {avg_val_loss} >> pixel_loss_log.txt")
+            os.system(f"echo Saved PixelSNAIL model at epoch {epoch+1} with loss: {avg_val_loss} >> pixel_top_loss_log.txt")
         else:
             epochs_no_improve += 1
 
@@ -239,7 +175,7 @@ def train():
             early_stop = True
 
     # Cleanup
-    del pixelsnail_t, pixelsnail_b, optimizer_t, optimizer_b, dataloader, val_dataloader
+    del pixelsnail_t, optimizer_t, dataloader, val_dataloader
     torch.cuda.empty_cache()
     print("Training completed.")
 
