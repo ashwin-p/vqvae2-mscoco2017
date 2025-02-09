@@ -1,4 +1,6 @@
+
 # utils/datasets.py
+import random
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -8,9 +10,8 @@ import pandas as pd
 
 from models.clip_model import CLIPTextEncoder
 
-
 class MSCOCODataset(Dataset):
-    def __init__(self, images_dir, captions_file=None, clip_model=None, device='cuda', transform=None, fraction=1.0):
+    def __init__(self, images_dir, captions_file=None, clip_model=None, device='cuda', transform=None):
         """
         Args:
             images_dir (str): Directory containing images.
@@ -18,7 +19,6 @@ class MSCOCODataset(Dataset):
             clip_model (CLIPTextEncoder, optional): Preloaded CLIP text encoder model.
             device (str): Device for CLIP model ('cuda' or 'cpu').
             transform (callable, optional): Transformations for images.
-            fraction (float, optional): Fraction of the dataset to use (0 < fraction <= 1).
         """
         self.images_dir = images_dir
         self.transform = transform
@@ -38,12 +38,6 @@ class MSCOCODataset(Dataset):
             # If no captions, just load images
             self.image_filenames = sorted(os.listdir(images_dir))
             self.image_captions = None
-
-        # Apply fraction to reduce dataset size
-        if fraction < 1.0:
-            num_samples = int(len(self.image_filenames) * fraction)
-            self.image_filenames = self.image_filenames[:num_samples]
-
         print(f"Using {len(self.image_filenames)} images.")
 
     def __len__(self):
@@ -60,50 +54,32 @@ class MSCOCODataset(Dataset):
 
         if self.image_captions is not None:
             captions = self.image_captions[image_filename]
-
-            # Ensure CLIP model is provided
             if self.clip_model is None:
                 raise ValueError("CLIP model is required when captions are used.")
-
-            # Compute CLIP embeddings for all captions and average them
+            # Randomly select one caption every time __getitem__ is called.
+            random_caption = random.choice(captions)
             with torch.no_grad():
-                text_embeddings = self.clip_model(captions).to(self.device)  # Shape: (num_captions, 512)
-                avg_text_embedding = text_embeddings.mean(dim=0)  # Shape: (512,)
+                text_embeddings = self.clip_model([random_caption]).to(self.device)  # Shape: (1, 512)
+                text_embedding = text_embeddings.squeeze(0)  # Shape: (512,)
         else:
-            # No captions, return empty tensor
-            avg_text_embedding = torch.zeros(512)
+            text_embedding = torch.zeros(512)
 
-        return image, avg_text_embedding
-
+        return image, text_embedding
 
 def get_dataloader_mscoco(images_dir, captions_file=None, batch_size=64, clip_model=None, device='cuda',
-                           shuffle=True, num_workers=4, fraction=1.0, persistent_workers=False):
+                           shuffle=True, num_workers=4, persistent_workers=False):
     """
     Creates a DataLoader for the MS COCO dataset.
-    
-    Args:
-        images_dir (str): Path to image directory.
-        captions_file (str, optional): Path to captions CSV file.
-        batch_size (int): Batch size.
-        clip_model (CLIPTextEncoder, optional): CLIP text encoder model.
-        device (str): Device to run CLIP model on.
-        shuffle (bool): Whether to shuffle dataset.
-        num_workers (int): Number of DataLoader workers.
-        fraction (float): Fraction of dataset to use.
-        persistent_workers (bool): Whether to keep workers alive for multiple epochs.
-
-    Returns:
-        DataLoader: DataLoader for MS COCO dataset.
+    This version always loads the entire dataset.
     """
     transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet normalization
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    dataset = MSCOCODataset(images_dir, captions_file, clip_model, device=device, transform=transform, fraction=fraction)
-
+    dataset = MSCOCODataset(images_dir, captions_file, clip_model, device=device, transform=transform)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -111,6 +87,4 @@ def get_dataloader_mscoco(images_dir, captions_file=None, batch_size=64, clip_mo
         num_workers=num_workers,
         persistent_workers=persistent_workers
     )
-    
     return dataloader
-
