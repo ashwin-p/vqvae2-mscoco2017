@@ -39,7 +39,7 @@ def train():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     vqvae = VQVAE().to(device)
-    vqvae_checkpoint = torch.load('vqvae_top_latest.pth', map_location=device)
+    vqvae_checkpoint = torch.load('vqvae2_mscoco.pth', map_location=device)
     vqvae.load_state_dict(vqvae_checkpoint['state_dict'])
     vqvae.eval()  # Freeze the VQ-VAE
 
@@ -48,10 +48,10 @@ def train():
 
     train_loader = get_dataloader_mscoco(train_images_dir, train_captions_file, batch_size,
                                          clip_text_encoder, device=device, shuffle=True,
-                                         num_workers=16, persistent_workers=True)
+                                         num_workers=26, persistent_workers=True)
     val_loader = get_dataloader_mscoco(val_images_dir, val_captions_file, batch_size,
                                        clip_text_encoder, device=device, shuffle=False,
-                                       num_workers=16, persistent_workers=True)
+                                       num_workers=26, persistent_workers=True)
 
     #The VQ-VAE top branch uses 512 codes; we add one extra token for [MASK].
     n_embed = 512  
