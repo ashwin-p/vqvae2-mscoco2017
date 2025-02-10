@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 import numpy as np
@@ -17,20 +17,20 @@ from models.vqvae import VQVAE
 from models.clip_model import CLIPTextEncoder
 from models.diffusion_model import DiffusionTransformer, forward_diffusion
 from utils.datasets import get_dataloader_mscoco
-from utils.utils import save_checkpoint, print_model_parameters  # Assume you have a utility for checkpoint saving
+from utils.utils import save_checkpoint, print_model_parameters
 
 def train():
     # Hyperparameters and paths
     num_epochs = 100
+    warmup_epochs = 5
     patience = 5
     initial_lr = 1e-4
     min_lr = 1e-6
-    batch_size = 64
+    batch_size = 128
     gradient_accumulation_steps = 4
-    T = 100  # Total diffusion timesteps
-    cond_drop_prob = 0.1  # Probability to drop the text condition (for classifier-free guidance)
+    T = 100
+    cond_drop_prob = 0.1
 
-    # Paths
     train_images_dir = '/path/to/train/images'
     train_captions_file = '/path/to/train/captions.csv'
     val_images_dir = '/path/to/val/images'
@@ -43,7 +43,6 @@ def train():
     vqvae.load_state_dict(vqvae_checkpoint['state_dict'])
     vqvae.eval()  # Freeze the VQ-VAE
 
-
     clip_text_encoder = CLIPTextEncoder(device=device)
     clip_text_encoder.eval()
 
@@ -54,31 +53,47 @@ def train():
                                        clip_text_encoder, device=device, shuffle=False,
                                        num_workers=16, persistent_workers=True)
 
-    # Set up the diffusion model (training on top latents only)
-    # In our VQVAE code, the top latent quantization uses n_embed codes.
-    # Here we assume n_embed is 512; we add one extra token for [MASK].
+    #The VQ-VAE top branch uses 512 codes; we add one extra token for [MASK].
     n_embed = 512  
-    num_tokens = n_embed + 1  # vocabulary: indices 0..511 for codes, index 512 is [MASK]
+    num_tokens = n_embed + 1  # Vocabulary: indices 0..511 for codes; index 512 is [MASK]
     embed_dim = 256
-    num_layers = 12
+    num_layers = 18
     num_heads = 8
     mask_token = num_tokens - 1
 
-    # For 256x256 images, if your encoder downsamples by a factor of 8,
-    # then the top latent spatial dimensions are e.g. 32x32 => sequence length = 1024.
     max_seq_len = 32 * 32
 
     diffusion_model = DiffusionTransformer(num_tokens, embed_dim, num_layers, num_heads,
                                             max_seq_len=max_seq_len).to(device)
     print_model_parameters(diffusion_model)
     optimizer = Adam(diffusion_model.parameters(), lr=initial_lr)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=min_lr)
+
+    # ------------------------------
+    # Define a combined warmup + cosine decay scheduler.
+    # The scheduler uses a LambdaLR that:
+    # - For the first 'warmup_epochs', increases the lr linearly.
+    # - Then decays the lr with a cosine schedule from 1.0 to (min_lr/initial_lr).
+    # For example, with initial_lr=1e-4 and min_lr=1e-6, the ratio is 0.01.
+    # ------------------------------
+    ratio = min_lr / initial_lr  # In our case, 1e-6/1e-4 = 0.01
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            # Linear warmup: at epoch 0: (1/5)=0.2, epoch 1: 0.4, ... epoch 4: 1.0
+            return float(epoch + 1) / warmup_epochs
+        else:
+            progress = float(epoch - warmup_epochs) / float(max(1, num_epochs - warmup_epochs))
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            # Scale the cosine decay to decay from 1.0 to ratio (e.g., 0.01)
+            return cosine_decay * (1 - ratio) + ratio
+
+    scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
     scaler = GradScaler()  # For mixed precision training
 
     best_val_loss = np.inf
     epochs_no_improve = 0
     early_stop = False
-    # Training Loop with Mixed Precision and Classifier-Free Guidance
+
+    # Training Loop
     for epoch in range(num_epochs):
         if early_stop:
             print("Early stopping triggered.")
@@ -95,7 +110,7 @@ def train():
 
             # Obtain top latent tokens from VQ-VAE.
             with torch.no_grad():
-                # vqvae.encode returns (quant_t, quant_b, diff, id_t, id_b).
+                # vqvae.encode returns (quant_t, quant_b, diff, id_t, id_b)
                 # Use top latent indices (id_t) for diffusion training.
                 _, _, _, id_t, _ = vqvae.encode(images)
                 # Flatten spatial dimensions: [B, H, W] -> [B, N]
@@ -127,14 +142,13 @@ def train():
             train_loss += loss.item() * gradient_accumulation_steps
             loop.set_postfix(loss=f"{loss.item() * gradient_accumulation_steps:.4f}")
 
-            # Free memory explicitly.
             del images, text_embeddings, x0, x_t, logits, loss
             torch.cuda.empty_cache()
 
         avg_train_loss = train_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Training Loss: {avg_train_loss:.4f}")
 
-        scheduler.step()
+        scheduler.step()  # Update the learning rate
 
         # Validation Loop
         diffusion_model.eval()
@@ -170,7 +184,6 @@ def train():
             print(f"No improvement for {patience} epochs, stopping training.")
             early_stop = True
 
-    # Cleanup
     del diffusion_model, optimizer, scheduler, train_loader, val_loader, scaler
     torch.cuda.empty_cache()
     print("Diffusion transformer training completed.")
