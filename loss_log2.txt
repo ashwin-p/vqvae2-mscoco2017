@@ -56,3 +56,4 @@ Saved model at epoch 69 with loss: 0.03555678157135844
 Saved model at epoch 74 with loss: 0.03554773414507508
 Saved model at epoch 77 with loss: 0.035532737243920566
 Saved model at epoch 79 with loss: 0.03553216271102429
+Saved model at epoch 1 with loss: 0.035201823152601716
