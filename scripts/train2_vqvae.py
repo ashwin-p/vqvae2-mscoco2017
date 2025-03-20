@@ -38,7 +38,7 @@ def train():
     model = VQVAE().to(device)
 
     # Load last checkpoint if available
-    checkpoint_path = "/root/workspace/vqvae2-mscoco2017/vqvae_latest.pth"
+    checkpoint_path = "/root/workspace/vqvae2-mscoco2017/vqvae2_mscoco_best.pth"
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}...")
         checkpoint = torch.load(checkpoint_path, map_location=device)
