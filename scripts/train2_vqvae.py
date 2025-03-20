@@ -7,7 +7,7 @@ sys.path.append('/root/workspace/vqvae2-mscoco2017/')
 import torch
 import os
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.nn import functional as F
 from models.vqvae import VQVAE
 from models.clip_model import CLIPTextEncoder
@@ -20,10 +20,9 @@ def train():
     # Hyperparameters
     num_epochs = 100
     patience = 5
-    initial_learning_rate = 1e-5  # Fine-tuning LR
-    beta = 1.0  # Commitment loss weight
-    batch_size = 128
-    gradient_accumulation_steps = 4  # Accumulate gradients over 4 steps
+    initial_learning_rate = 1e-4  # Updated initial LR
+    beta = 0.25  # Commitment loss weight
+    batch_size = 256
     images_dir = '/root/workspace/coco2017/train2017'
     captions_file = '/root/workspace/vqvae2-mscoco2017/mscoco_train_captions.csv'
     val_images_dir = '/root/workspace/coco2017/val2017'
@@ -47,13 +46,9 @@ def train():
     else:
         print("Starting training from scratch")
 
-    # Log model parameters before training starts
-    #print("Model Architecture:")
-    #print(model)
-
-    # Initialize optimizer and scheduler
+    # Initialize optimizer and scheduler using ReduceLROnPlateau
     optimizer = Adam(model.parameters(), lr=initial_learning_rate)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)  # Cosine Annealing
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=patience, verbose=True, min_lr=1e-6)
 
     # Load dataset with 16 workers
     dataloader = get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_text_encoder,
@@ -83,13 +78,10 @@ def train():
             recon_loss = F.mse_loss(x_recon, images)
             loss = recon_loss + beta * diff  # Applying β
 
-            # Backward pass
+            # Backward pass and weight update
             loss.backward()
-
-            # Only update the weights every `gradient_accumulation_steps` steps
-            if (step + 1) % gradient_accumulation_steps == 0:
-                optimizer.step()
-                optimizer.zero_grad()
+            optimizer.step()
+            optimizer.zero_grad()
 
             train_loss += loss.item()
 
@@ -122,8 +114,8 @@ def train():
         else:
             epochs_no_improve += 1
 
-        # Adjust learning rate using cosine annealing
-        scheduler.step()
+        # Adjust learning rate using ReduceLROnPlateau scheduler
+        scheduler.step(avg_val_loss)
 
         # Early stopping
         if epochs_no_improve >= patience:
@@ -132,4 +124,3 @@ def train():
 
 if __name__ == "__main__":
     train()
-
