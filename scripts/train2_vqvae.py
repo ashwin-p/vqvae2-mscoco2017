@@ -38,7 +38,7 @@ def train():
     model = VQVAE().to(device)
 
     # Load last checkpoint if available
-    checkpoint_path = "/root/workspace/vqvae2-mscoco2017/vqvae_epoch_best.pth"
+    checkpoint_path = "/root/workspace/vqvae2-mscoco2017/vqvae_latest.pth"
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}...")
         checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -52,9 +52,9 @@ def train():
 
     # Load dataset with 16 workers
     dataloader = get_dataloader_mscoco(images_dir, captions_file, batch_size, clip_text_encoder,
-                                       device=device, shuffle=True, num_workers=16, persistent_workers=True, distributed=False)
+                                       device=device, shuffle=True, num_workers=32, persistent_workers=True, distributed=False)
     val_dataloader = get_dataloader_mscoco(val_images_dir, val_captions_file, batch_size, clip_text_encoder,
-                                           device=device, shuffle=False, num_workers=16, persistent_workers=True, distributed=False)
+                                           device=device, shuffle=False, num_workers=32, persistent_workers=True, distributed=False)
 
     best_val_loss = np.inf
     epochs_no_improve = 0
