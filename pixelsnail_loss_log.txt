@@ -1,0 +1,16 @@
+Saved PixelSNAIL model at epoch 1 with loss: 3.6865735590457915
+Saved PixelSNAIL model at epoch 1 with loss: 3.686662954092026
+Saved PixelSNAIL model at epoch 1 with loss: 3.7904954731464384
+Saved PixelSNAIL model at epoch 2 with loss: 3.708242726325989
+Saved PixelSNAIL model at epoch 3 with loss: 3.6728772103786467
+Saved PixelSNAIL model at epoch 1 with loss: 3.6917280912399293
+Saved PixelSNAIL model at epoch 2 with loss: 3.6121809244155885
+Saved PixelSNAIL model at epoch 3 with loss: 3.5747862339019774
+Saved PixelSNAIL model at epoch 4 with loss: 3.5407914757728576
+Saved PixelSNAIL model at epoch 5 with loss: 3.5268855512142183
+Saved PixelSNAIL model at epoch 6 with loss: 3.5074894607067106
+Saved PixelSNAIL model at epoch 7 with loss: 3.4912916719913483
+Saved PixelSNAIL model at epoch 8 with loss: 3.482203149795532
+Saved PixelSNAIL model at epoch 9 with loss: 3.471535271406174
+Saved PixelSNAIL model at epoch 10 with loss: 3.455495125055313
+Saved PixelSNAIL model at epoch 11 with loss: 3.440648007392883
